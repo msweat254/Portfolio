@@ -1,0 +1,140 @@
+CREATE OR REPLACE PROCEDURE IonSF.CreateOrReplaceIonSixCompTable()
+BEGIN
+CREATE OR REPLACE TABLE `IonSF.Ion_Six_Comp_View` AS
+WITH CloserMissions AS (
+  SELECT
+    Rep
+    ,Position
+    ,SRT.Email
+    ,Team
+    ,Closer_Sales_Team AS Sales_Team
+    ,SUM(CASE WHEN RFP_Date = '2024-05-06' AND Conner_Lead_Channel = 'Self Gen' THEN 1 ELSE 0 END) AS Mission1Day1Closer
+    ,SUM(CASE WHEN RFP_Date = '2024-05-07' AND Conner_Lead_Channel = 'Self Gen' THEN 1 ELSE 0 END) AS Mission1Day2Closer
+    ,SUM(CASE WHEN RFP_Date = '2024-05-08' AND Conner_Lead_Channel = 'Self Gen' THEN 1 ELSE 0 END) AS Mission1Day3Closer
+    ,SUM(CASE WHEN Contract_Date BETWEEN '2024-05-09' AND '2024-05-11' THEN 1 ELSE 0 END) Mission2ProgressCloser
+    ,SUM(CASE WHEN Contract_Date BETWEEN '2024-05-13' AND '2024-05-15' THEN 1 ELSE 0 END) Mission3ProgressCloser
+    ,SUM(CASE WHEN Conner_Lead_Channel = 'Self Gen' AND Contract_Date BETWEEN '2024-05-16' AND '2024-05-18' THEN 1 ELSE 0 END) Mission4ProgressCloser
+    ,SUM(CASE
+      WHEN RFP_Date BETWEEN '2024-05-20' AND '2024-05-22' AND Conner_Lead_Channel = 'Self Gen'
+      THEN 1 ELSE 0
+    END) AS Mission5ProgressCloser
+    ,SUM(CASE
+      WHEN Contract_Date BETWEEN '2024-05-23' AND '2024-05-25'
+      THEN 1 ELSE 0
+    END) AS Mission6ProgressCloser
+  FROM `IonSF.Ion_SIX_Registered_Team` SRT
+  LEFT JOIN `IonSF.Sales_Info_Table` SIT ON SRT.Email = SIT.Closer_Email OR SRT.Rep = SIT.Closer 
+  GROUP BY ALL
+),
+SetterMissions AS (
+  SELECT
+    Rep
+    ,Position
+    ,SRT.Email
+    ,Team
+    ,SUM(CASE WHEN RFP_Date = '2024-05-06' THEN 1 ELSE 0 END) AS Mission1Day1Setter
+    ,SUM(CASE WHEN RFP_Date = '2024-05-07' THEN 1 ELSE 0 END) AS Mission1Day2Setter
+    ,SUM(CASE WHEN RFP_Date = '2024-05-08' THEN 1 ELSE 0 END) AS Mission1Day3Setter
+    ,SUM(CASE WHEN Sit_Date BETWEEN '2024-05-09' AND '2024-05-11' THEN 1 ELSE 0 END) AS Mission2ProgressSetter
+    ,SUM(CASE WHEN Contract_Date BETWEEN '2024-05-13' AND '2024-05-15' THEN 1 ELSE 0 END) AS Mission3ProgressSetter
+    ,SUM(CASE WHEN Sit_Date BETWEEN '2024-05-16' AND '2024-05-18' THEN 1 ELSE 0 END) Mission4ProgressSetter
+    ,SUM(CASE
+      WHEN RFP_Date BETWEEN '2024-05-20' AND '2024-05-22'
+      THEN 1 ELSE 0
+    END) AS Mission5ProgressSetter
+    ,SUM(CASE
+      WHEN Contract_Date BETWEEN '2024-05-23' AND '2024-05-25'
+      THEN 1 ELSE 0
+    END) AS Mission6ProgressSetter
+  FROM `IonSF.Ion_SIX_Registered_Team` SRT
+  LEFT JOIN `IonSF.Sales_Info_Table` SIT ON (SRT.Email = SIT.Setter_Email OR SRT.Rep = SIT.Setter) AND SIT.Setter != SIT.Closer
+  GROUP BY ALL
+),
+Combined AS (
+SELECT 
+  C.Rep 
+  ,C.Team 
+  ,C.Position
+  ,COALESCE(C.Email,S.Email) AS Email
+  ,Mission1Day1Closer
+  ,Mission1Day1Setter
+  ,Mission1Day2Closer
+  ,Mission1Day2Setter
+  ,Mission1Day3Closer
+  ,Mission1Day3Setter
+  ,Mission2ProgressCloser
+  ,Mission3ProgressCloser
+  ,Mission4ProgressCloser
+  ,Mission5ProgressCloser
+  ,Mission6ProgressCloser
+  ,Mission2ProgressSetter
+  ,Mission3ProgressSetter
+  ,Mission4ProgressSetter
+  ,Mission5ProgressSetter
+  ,Mission6ProgressSetter
+FROM CloserMissions C
+LEFT JOIN SetterMissions S ON C.Rep = S.Rep
+),
+CombinedWMemNum AS (
+  SELECT
+    C.Rep 
+    ,Team
+    ,Position
+    ,Email
+    ,SUM(Mission1Day1Closer+Mission1Day1Setter) AS Mission1Day1
+    ,SUM(Mission1Day2Closer+Mission1Day2Setter) AS Mission1Day2
+    ,SUM(Mission1Day3Closer+Mission1Day3Setter) AS Mission1Day3
+    ,SUM(Mission2ProgressCloser+Mission2ProgressSetter) AS Mission2Progress
+    ,SUM(Mission3ProgressCloser+Mission3ProgressSetter) AS Mission3Progress
+    ,SUM(Mission4ProgressCloser+Mission4ProgressSetter) AS Mission4Progress
+    ,SUM(Mission5ProgressCloser+Mission5ProgressSetter) AS Mission5Progress
+    ,SUM(Mission6ProgressCloser+Mission6ProgressSetter) AS Mission6Progress
+    ,ROW_NUMBER() OVER (PARTITION BY Team) AS Team_Member_Number
+  FROM Combined C
+  GROUP BY ALL
+),
+CompleteIncomplete AS (
+  SELECT *
+    ,CASE
+      WHEN Mission1Day1 > 0 AND Mission1Day2 > 0 AND Mission1Day3 > 0 THEN 1 ELSE 0
+    END AS Mission1Complete
+    ,CASE 
+      WHEN Mission2Progress > 0 THEN 1 ELSE 0
+    END AS Mission2Complete
+    ,CASE 
+      WHEN Mission3Progress > 0 THEN 1 ELSE 0
+    END AS Mission3Complete
+    ,CASE
+      WHEN Position = 'Setter' THEN 
+        CASE WHEN Mission4Progress >= 3 THEN 1 ELSE 0 END
+      ELSE
+        CASE WHEN Mission4Progress > 0 THEN 1 ELSE 0 END
+    END AS Mission4Complete
+  FROM CombinedWMemNum
+)
+SELECT
+  Rep
+  ,Team
+  ,Position
+  ,C.Email
+  ,CASE WHEN (SUM(Mission1Complete) OVER (PARTITION BY Team)) = MAX(Team_Member_Number) OVER (PARTITION BY Team) THEN 'Complete' ELSE 'Incomplete' END AS Mission1TeamComplete
+  ,CASE WHEN (SUM(Mission2Complete) OVER (PARTITION BY Team)) = MAX(Team_Member_Number) OVER (PARTITION BY Team) THEN 'Complete' ELSE 'Incomplete' END AS Mission2TeamComplete
+  ,CASE WHEN (SUM(Mission3Complete) OVER (PARTITION BY Team)) = MAX(Team_Member_Number) OVER (PARTITION BY Team) THEN 'Complete' ELSE 'Incomplete' END AS Mission3TeamComplete
+  ,CASE WHEN (SUM(Mission4Complete) OVER (PARTITION BY Team)) = MAX(Team_Member_Number) OVER (PARTITION BY Team) THEN 'Complete' ELSE 'Incomplete' END AS Mission4TeamComplete
+  ,CASE WHEN (SUM(Mission5Progress) OVER (PARTITION BY Team)) >= 25 THEN 'Complete' ELSE 'Incomplete' END AS Mission5TeamComplete
+  ,CASE WHEN (SUM(Mission6Progress) OVER (PARTITION BY Team)) >= 7 THEN 'Complete' ELSE 'Incomplete' END AS Mission6TeamComplete
+  ,Mission1Day1
+  ,Mission1Day2
+  ,Mission1Day3
+  ,CASE WHEN Mission1Complete = 1 THEN 'Complete' ELSE 'Incomplete' END AS Mission1Complete
+  ,Mission2Progress
+  ,CASE WHEN Mission2Complete = 1 THEN 'Complete' ELSE 'Incomplete' END AS Mission2Complete
+  ,Mission3Progress
+  ,CASE WHEN Mission3Complete = 1 THEN 'Complete' ELSE 'Incomplete' END AS Mission3Complete
+  ,Mission4Progress
+  ,CASE WHEN Mission4Complete = 1 THEN 'Complete' ELSE 'Incomplete' END AS Mission4Complete
+  ,Mission5Progress
+  ,Mission6Progress
+  ,MAX(Team_Member_Number) OVER (PARTITION BY Team) AS TeamSize
+FROM CompleteIncomplete C;
+END
