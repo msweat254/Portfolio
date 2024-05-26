@@ -1,0 +1,453 @@
+CREATE OR REPLACE PROCEDURE
+  IonSF.CreateOrReplaceAccountInfoTable()
+BEGIN
+CREATE OR REPLACE TABLE
+  IonSF.Account_Info_Table AS
+WITH
+  LatestConvosoLead AS (
+  SELECT
+    *,
+    ROW_NUMBER() OVER (PARTITION BY id ORDER BY created_at DESC) AS LeadNum
+  FROM
+    Convoso.Lead ),
+  LatestHOA AS (
+  SELECT
+    *,
+    ROW_NUMBER() OVER (PARTITION BY Project__c ORDER BY CreatedDate DESC) AS HOANum
+  FROM
+    IonSF.HOA mh2 ),
+  LatestProject AS (
+  SELECT
+    *,
+    ROW_NUMBER() OVER (PARTITION BY Account_ID__c ORDER BY CreatedDate DESC) AS ProjectNum
+  FROM
+    IonSF.Project ),
+  LatestInstallation AS (
+  SELECT
+    *,
+    ROW_NUMBER() OVER (PARTITION BY Project__c ORDER BY CreatedDate DESC) AS InstallNum
+  FROM
+    IonSF.Installation mi ),
+  LatestDesign AS (
+  SELECT
+    *,
+    ROW_NUMBER() OVER (PARTITION BY Project__c ORDER BY CreatedDate DESC) AS DesignNum
+  FROM
+    IonSF.Design md ),
+  LatestFinance AS (
+  SELECT
+    *,
+    ROW_NUMBER() OVER (PARTITION BY Project__c ORDER BY CreatedDate DESC) AS FinanceNum
+  FROM
+    IonSF.Financing mf ),
+  rep_info AS (
+  SELECT
+    c1.id,
+    c1.Name AS ContactName,
+    c1.Hire_Date__c AS HireDate,
+    c1.Employment_Terminated_Date__c AS TerminationDate,
+    c1.active__c AS Active,
+    c1.rep_position__c AS Rep_Position,
+    c2.Name AS ReportsToName,
+    c3.Name AS RecruitedByName,
+    a.name AS Recruiter_Team
+  FROM
+    IonSF.Contact AS c1
+  LEFT JOIN
+    IonSF.Contact AS c2
+  ON
+    c1.ReportsToID = c2.Id
+  LEFT JOIN
+    IonSF.Contact AS c3
+  ON
+    c1.recruited_by__c = c3.Id
+  LEFT JOIN
+    IonSF.Account a
+  ON
+    a.Id = c3.accountid
+  WHERE
+    (c1.Title != 'Home Owner'
+      OR c1.Title IS NULL) ),
+  SSTotals AS (
+  SELECT
+    Project__c,
+    SUM(Quoted_Cost__c) AS TotalQuoted
+  FROM
+    IonSF.SpecialService mss
+  WHERE
+    IsDeleted = FALSE
+  GROUP BY
+    Project__c ),
+  FinanceRecords AS (
+  SELECT
+    Project__c,
+    MAX(Finance_Change_Order_Requested__c) AS ChangeOrderDate
+  FROM
+    IonSF.Financing mf
+  GROUP BY
+    Project__c )
+SELECT
+  L.id Lead_Id,
+  AP.Id AS Account_Id,
+  L.Status AS Lead_Status,
+  L.Status_Reason__c AS Status_Reason,
+  P.id Project_Id,
+  LEFT(P.id,15) AS Salesforce_Ready_Id,
+  P.Name AS Project_Name,
+  COALESCE(P.Primary_Contact_Name__c, L.Name) AS Customer_Name,
+  COALESCE(P.Copiable_Address__c, L.Copy_Address__c) AS Address,
+  COALESCE(P.City__c, L.City) AS City,
+  COALESCE(P.State__c, L.State) AS State,
+  COALESCE(P.Zip_Code__c, L.PostalCode) AS Zip,
+  COALESCE(P.Primary_Contact_Phone__c, L.Phone) AS Phone_Number,
+  COALESCE(P.Primary_Contact_Email__c, L.Email) AS Email,
+  P.Setter__c AS Setter,
+  SRI.Id AS Setter_Contact_Id,
+  SRI.RecruitedByName AS Setter_recruiter,
+  SRI.Active AS Setter_Active,
+  SRI.Rep_Position AS Setter_Position,
+  SRI.ReportsToName AS Setter_Manager,
+  SRI.HireDate AS Setter_Hire_Date,
+  SRI.TerminationDate AS Setter_Termination_Date,
+  SRI.Recruiter_Team AS Setter_Recruiter_Team,
+  P.Has_Customer_App__c AS Customer_App,
+  TRM1.Region AS Setter_Recruiter_Region,
+  CRI.ContactName AS Closer,
+  CRI.Id AS Closer_Contact_Id,
+  CRI.Active AS Closer_Active,
+  CRI.RecruitedByName AS Closer_recruiter,
+  CRI.ReportsToName AS Closer_Manager,
+  CRI.HireDate AS Closer_Hire_Date,
+  CRI.Rep_Position AS Rep_Position,
+  CRI.Recruiter_Team AS Closer_Recruiter_Team,
+  CRI.TerminationDate AS Closer_Termination_Date,
+  TRM2.Region AS Closer_Recruiter_Region,
+  A.Name AS Sales_Team,
+  AHJ.Name AS AHJ,
+  P.Territory_Picklist__c AS Territory,
+  P.Inside_Sales_formula__c,
+  COALESCE(P.IS_Setter_Formula__c, AIS.Name) AS Inside_Setter,
+  isl.Status AS IS_Setter_Status,
+  TRM3.Region AS Sales_Region,
+  CASE
+    WHEN (P.Inside_Sales_formula__c = TRUE OR LOWER(P.IS_Setter_Formula__c) LIKE '%corporate%') AND A.Name = 'Inside Sales Closer Sales Team' THEN 'Inside-Inside'
+    WHEN (P.Inside_Sales_formula__c = TRUE
+    OR LOWER(P.IS_Setter_Formula__c) LIKE '%corporate%') THEN 'Inside - Outside'
+    WHEN (P.Setter__c IS NULL) OR (CRI.ContactName = SRI.ContactName) THEN 'Self Gen'
+  ELSE
+  'Outside - Outside'
+END
+  AS Sales_Channel,
+  P.New_Appointment_Disposition__c AS Appt_Disposition,
+  P.Sub_Disposition__c AS Appt_Sub_Disposition,
+  A2.Name AS Utility_Company,
+  A2.Purchase_Rate_From_Utility__c AS Utility_Rate,
+  A2.Buyback_Rate_From_Customer__c AS Utility_Buyback_Rate,
+  L.Lead_Creation_Date__c AS Lead_Date,
+  DATE(P.Proposal_Requested_Date__c) AS RFP_Date,
+  DATETIME(FORMAT_TIMESTAMP('%F %T', TIMESTAMP(FORMAT_TIMESTAMP('%F %T', TIMESTAMP(P.Return_Appointment_Date_Time__c), 'UTC')), 'US/Mountain')) AS Return_Appointment_Date,
+  COALESCE(DATE(FORMAT_TIMESTAMP('%F %T', TIMESTAMP(FORMAT_TIMESTAMP('%F %T', TIMESTAMP(P.Appointment_Held_Date_Time_Stamp__c), 'UTC')), 'US/Mountain')),DATE(P.Appointment_Held_Date__c)) AS Sit_Date,
+  P.Contract_Execution_Formula__c AS Contract_Date,
+  P.NTP_Approved_Date__c AS NTP_Approved_Date # Need a new date here because they don't use it anymore
+  ,
+  F.Contract_Stage_Complete__c AS Contract_Stage_Complete # This means that they have all of their documents in
+  ,
+  P.Final_Inspection_Scheduled_Date__c AS Final_Inspection_Scheduled_Date,
+  P.System_Finalized_Formula__c AS System_Finalized_Date,
+  HO.HOA_Submitted__c AS HOA_Submitted_Date,
+  HO.HOA_Approved__c AS HOA_Approved_Date,
+  I.Design_Validated__c AS Design_Validated_Date,
+  D.Plan_Set_BOM_Completed__c AS Plan_Set_BOM_Completed_Date,
+  P.Site_Survey_Scheduled_Date__c AS Sit_Survey_Scheduled_Date,
+  P.Site_Survey_Completed_Formula__c AS Site_Survey_Date,
+  D.Proposal_QA__c AS Design_Complete_Date,
+  I.Permit_Submitted__c AS Permit_Submitted,
+  I.Permit_Approval__c AS Permit_Approved,
+  I.Pre_Utility_Application_Submitted__c AS Utility_NEM_Application_Submitted # Net metering is submitted. Could be replaced from utilities object, but will circle back later
+  ,
+  I.Pre_Utility_Application_Approved__c AS Utility_NEM_Application_Approved # Net metering is approved. Replace these with the NEM approved date from projects
+  ,
+  I.Installation_Service_Created__c AS Installation_Ticket_Created,
+  I.Install_Scheduled_Date__c AS Install_Scheduled_Date,
+  P.Installation_Date_Formula__c AS Install_Complete_Date,
+  I.Field_Ready_for_Inspection__c AS Ready_For_Inspection_Date # Ready for inspection date. Called field_audit_ready for inspection, Should be in installation object
+  ,
+  I.Final_Building__c AS Inspection_Complete_Date # Inspection date. All_inspections_complete__c from Installation object
+  ,
+  I.Post_Utility_Interconnection_Submitted__c AS PTO_Submitted # Change this to where type of utilities object = 'PTO' and the date from that
+  ,
+  P.Utility_PTO_Approved__c AS PTO_Date # For 52 records (as of 8/30/2023) there is a PTO date when you use PTO_Approval__c but (potentially) not when you use PTO_Approved__c (but that doesn't come through the ETL right now)
+  ,
+  I.Final_Call_Date__c AS Final_Call_Date # add final call from installation object
+  ,
+  DATETIME(FORMAT_TIMESTAMP('%F %T', TIMESTAMP(FORMAT_TIMESTAMP('%F %T', TIMESTAMP(P.Cancellation_Date_Time_Requested__c), 'UTC')), 'US/Mountain')) AS Cancel_Date,
+  P.Status__c AS Project_Status # Change to Project_Status to be more clear with existing terminology
+  ,
+  P.Suspension_Type__c AS Suspension_Type,
+  CASE
+    WHEN (P.Contract_Execution_Formula__c IS NOT NULL AND P.Status__c IN ('In-Progress', 'Complete')) THEN 1
+  ELSE
+  0
+END
+  AS Net_Sale_Flag,
+  ROUND(P.System_Size_Formula__c/1000,2) AS System_Size_kw,
+  L.lead_price__c AS Lead_Cost,
+  COALESCE(CA2.name, CA.name) AS Campaign_Name,
+  CASE
+    WHEN (CA.name IS NOT NULL OR P.Inside_Sales_formula__c = TRUE OR A.name = 'Inside Sales Closer Sales Team') THEN 'Inside' # Add A.name = Inside Sales Closer Sales Team and Setter like '%corporate%'
+  ELSE
+  'Outside'
+END
+  AS Lead_Channel,
+  L.Lead_Source__c AS Lead_Source,
+  D.Usage_Type__c,
+  F.Financing_Source__c AS Lender,
+  CASE
+    WHEN F.Financing_Source__c = 'Owner Financing' AND F.Financing_Product__c LIKE '%Single%' THEN 'Other'
+  ELSE
+  F.Financing_Product__c
+END
+  AS Finance_Product,
+  F.Gross_System_Price__c AS Gross_System_Price,
+  F.Net_System_Price__C AS Net_System_Price,
+  F.EPW__c AS Gross_PPW,
+  F.Net_PPW_After_Adders__c AS Net_PPW_After_Adders,
+  F.Net_PPW__c AS Net_PPW,
+  F.Pre_Incentive_Payment__c AS Pre_Incentive_Payment,
+  F.Post_Incentive_Payment__c AS Post_Incentive_Payment,
+  F.Payment_Without_Incentive__c AS Payment_Without_Incentive,
+  F.Primary_Financing_Amount__c AS Primary_Financing_Amount,
+  F.Secondary_Financing_Amount__c AS Secondary_Financing_Amount,
+  D.Annual_kW_Usage__c AS Annual_kW_Usage,
+  D.Est_Annual_Production__c AS Estimated_Annual_Production,
+  D.Est_Annual_Production__c/12 AS Estimated_Monthly_Production,
+  L.X3rd_Party_Lead_ID__c AS `3rd_Party_Lead_Id`,
+  L.Convoso_Lead_Id__c,
+  L2.called_count,
+  L2.status_name,
+  L2.Lead_Status AS Convoso_Lead_Status,
+  L2.Status_Reason AS Convoso_Status_Reason,
+  CASE
+    WHEN P.Utility_PTO_Approved__c IS NOT NULL THEN 'PTO Approved'
+    WHEN I.Post_Utility_Interconnection_Submitted__c IS NOT NULL THEN 'PTO Submitted'
+    WHEN I.Final_Building__c IS NOT NULL THEN 'Inspection Complete'
+    WHEN I.Field_Ready_for_Inspection__c IS NOT NULL THEN 'Ready For Inspection'
+    WHEN P.Installation_Date_Formula__c IS NOT NULL THEN 'Installation Complete'
+    WHEN I.Install_Scheduled_Date__c IS NOT NULL THEN 'Installation Scheduled'
+    WHEN I.Installation_Service_Created__c IS NOT NULL THEN 'Installation Service Created'
+    WHEN I.Pre_Utility_Application_Approved__c IS NOT NULL THEN 'Utility NEM Application Approved'
+    WHEN I.Pre_Utility_Application_Submitted__c IS NOT NULL THEN 'Utility NEM Application Submitted'
+    WHEN I.Permit_Approval__c IS NOT NULL THEN 'Permit Approved'
+    WHEN I.Permit_Submitted__c IS NOT NULL THEN 'Permit Submitted'
+    WHEN D.Proposal_QA__c IS NOT NULL THEN 'Design Complete'
+    WHEN P.Site_Survey_Completed_Formula__c IS NOT NULL THEN 'Site Survey Complete'
+    WHEN F.Contract_Stage_Complete__c IS NOT NULL THEN 'Contract Stage Complete'
+    WHEN P.NTP_Approved_Date__c IS NOT NULL THEN 'NTP Approved'
+    WHEN P.Contract_Execution_Formula__c IS NOT NULL THEN 'Contract Executed'
+    WHEN P.Appointment_Held_Date__c IS NOT NULL THEN 'Appointment Held'
+    WHEN FORMAT_TIMESTAMP('%F %T', TIMESTAMP(FORMAT_TIMESTAMP('%F %T', TIMESTAMP(P.Return_Appointment_Date_Time__c), 'UTC')), 'US/Mountain') IS NOT NULL THEN 'Return Appointment Set'
+    WHEN P.Proposal_Requested_Date__c IS NOT NULL THEN 'Proposal Requested'
+  ELSE
+  'Lead Created'
+END
+  AS Current_Milestone,
+  COALESCE(P.Utility_PTO_Approved__c,I.Post_Utility_Interconnection_Submitted__c,I.Final_Building__c,I.Field_Ready_for_Inspection__c,P.Installation_Date_Formula__c,I.Install_Scheduled_Date__c,I.Installation_Service_Created__c,I.Pre_Utility_Application_Approved__c,I.Pre_Utility_Application_Submitted__c,I.Permit_Approval__c,I.Permit_Submitted__c,DATETIME(D.Proposal_QA__c),P.Site_Survey_Completed_Formula__c,F.Contract_Stage_Complete__c,P.NTP_Approved_Date__c,P.Contract_Execution_Formula__c,P.Appointment_Held_Date__c,DATETIME(FORMAT_TIMESTAMP('%F %T', TIMESTAMP(FORMAT_TIMESTAMP('%F %T', TIMESTAMP(P.Return_Appointment_Date_Time__c), 'UTC')), 'US/Mountain')),P.Proposal_Requested_Date__c,L.Lead_Creation_Date__c) AS Current_Milestone_Date,
+  P.Project_Phase__c,
+  sst.TotalQuoted,
+  fr.ChangeOrderDate,
+  CASE
+    WHEN fr.ChangeOrderDate IS NOT NULL THEN 'Yes'
+  ELSE
+  'No'
+END
+  AS ChangeOrderFlag,
+  CASE
+    WHEN HO.CreatedDate IS NOT NULL THEN 'Yes'
+  ELSE
+  'No'
+END
+  AS HOAFLAG,
+  L2.status_name AS Convoso_Call_Dispo,
+  L.Last_Contacted_Date_Time__c AS Last_Contacted_Date,
+  P.Liaison__c AS Liaison_User_Id,
+  U.Name AS Sales_Liaison,
+  Days_Contract_Sign_to_SS_Complete__c AS Days_Contract_Sign_to_SS_Complete,
+  Days_Execution_to_Contract_Stage__c AS Days_Execution_to_Contract_Stage,
+  Days_From_CAD_Comp_to_Preutility_App_Sub__c AS Days_From_CAD_Comp_to_Preutility_App_Sub,
+  Days_from_Contract_Stage_to_Finalized__c AS Days_from_Contract_Stage_to_Finalized,
+  Days_from_Contract_Stage_to_Install__c AS Days_from_Contract_Stage_to_Install,
+  Days_from_Execution_to_Installation__c AS Days_from_Execution_to_Installation,
+  Days_From_Final_Building_to_PTO__c AS Days_From_Final_Building_to_PTO,
+  Days_From_Final_Inspec_Comp_to_PTO_Sub__c AS Days_From_Final_Inspec_Comp_to_PTO_Sub,
+  Days_from_Install_to_Finalized__c AS Days_from_Install_to_Finalized,
+  Days_from_Installation_to_Inspection__c AS Days_from_Installation_to_Inspection,
+  Days_From_PTO_App_To_Mon_Report_Active__c AS Days_From_PTO_App_To_Mon_Report_Active,
+  Days_from_Permit_Submitted_to_Approved__c AS Days_from_Permit_Submitted_to_Approved,
+  Days_from_Pre_Utility_Submit_to_Approved__c AS Days_from_Pre_Utility_Submit_to_Approved,
+  L.Age__c AS Age,
+  L.Domain__c AS Domain,
+  ACT.Avg_Days_Execution_to_Contract,
+  ACT.Avg_Days_CAD_Comp_to_Preutility_App_Sub,
+  ACT.Avg_Days_Contract_Stage_to_Finalized,
+  ACT.Avg_Days_Contract_Stage_to_Install,
+  ACT.Avg_Days_Execution_to_Installation,
+  ACT.Avg_Days_Final_Building_to_PTO,
+  ACT.Avg_Days_Final_Inspec_Comp_to_PTO_Sub,
+  ACT.Avg_Days_Install_to_Finalized,
+  ACT.Avg_Days_Installation_to_Inspection,
+  ACT.Avg_Days_PTO_App_To_Mon_Report_Active,
+  ACT.Avg_Days_Permit_Submitted_to_Approved,
+  ACT.Avg_Days_Pre_Utility_Submit_to_Approved,
+  ADB.Avg_Days_Con_to_Con_Complete,
+  ADB.Avg_Days_Con_Complete_to_Site,
+  ADB.Avg_Days_Site_to_NTP,
+  ADB.Avg_Days_Resurvey_to_Resurvey_Complete,
+  ADB.Avg_Days_NTP_to_Plan_Set,
+  ADB.Avg_Days_Redesign_to_Redesign_Complete,
+  ADB.Avg_Days_Rep_Contact_to_Order_Complete,
+  ADB.Avg_Days_Design_Complete_to_Validated,
+  ADB.Avg_Days_HOA_Open_to_Completed,
+  ADB.Avg_Days_Plan_Set_to_Special_Service_Complete,
+  ADB.Avg_Days_Plan_Set_to_Elec_Change,
+  ADB.Avg_Days_Plan_Set_to_NEM_Complete,
+  ADB.Avg_Days_Plan_Set_to_Permit,
+  ADB.Avg_Days_Permit_to_Install_Scheduled,
+  ADB.Avg_Days_Install_Scheduled_to_Install_Complete,
+  ADB.Avg_Days_Install_to_Inspection,
+  ADB.Avg_Days_Inspection_to_PTO,
+  ADB.Avg_Days_PTO_to_System_Finalized,
+  P.Last_Contact_Date__c AS Liaison_Last_Contact_Date,
+  P.Liaison_Last_Note__c AS Liaison_Last_Note_Date,
+  CASE
+    WHEN P.System_Finalized_Formula__c IS NOT NULL THEN 'Complete'
+    WHEN P.Utility_PTO_Completed__c IS NOT NULL THEN 'System Finalization'
+    WHEN I.Final_Building__c IS NOT NULL THEN 'Utility PTO'
+    WHEN P.Install_Complete__c IS NOT NULL THEN 'Inspection'
+    WHEN P.Install_Scheduled__c IS NOT NULL THEN 'Installation'
+    WHEN P.Permit_Approval_Formula__c IS NOT NULL THEN 'Pre-Installation'
+    WHEN D.Plan_Set_BOM_Completed__c IS NOT NULL THEN 'Permit/Utility NEM/Services'
+    WHEN P.HOA_Opened__c IS NOT NULL AND P.HOA_Completed__c IS NULL THEN 'HOA'
+    WHEN D.Proposal_QA__c IS NOT NULL THEN 'Design Validation'
+    WHEN F.Sales_Rep_Contacted__c IS NOT NULL AND F.Change_Order_Complete__c IS NULL THEN 'Finance Change'
+    WHEN D.Redesign_Required__c IS NOT NULL AND Redesign_Completed__c IS NULL THEN 'Design Revision'
+    WHEN P.Commissionable_Date__c IS NOT NULL THEN 'Design and Engineering'
+    WHEN D.Resurvey_Required__c IS NOT NULL AND D.Resurvey_Completed__c IS NULL THEN 'Resurvey'
+    WHEN P.Site_Survey_Completed_Formula__c IS NOT NULL THEN 'NTP'
+    WHEN P.Contract_Stage_Complete_Formula__c IS NOT NULL THEN 'Site Survey'
+    WHEN P.Contract_Execution_Formula__c IS NOT NULL THEN 'Contract'
+  ELSE 'Proposal'
+  END AS Braxton_Project_Stage,
+  P.Utility_PTO_Completed__c AS Utility_PTO_Completed,
+  P.HOA_Opened__c AS HOA_Opened_Date,
+  P.HOA_Completed__c AS HOA_Completed_Date,
+  P.Commissionable_Date__c AS Commissionable_Date,
+  F.Sales_Rep_Contacted__c AS Sales_Rep_Contacted_Date,
+  F.Change_Order_Complete__c AS Change_Order_Complete_Date,
+  D.Redesign_Required__c AS Redesign_Req_Date,
+  D.Resurvey_Completed__c AS Resurvey_Completed_Date,
+  D.Resurvey_Required__c AS Resurvey_Req_Date,
+  D.Redesign_Completed__c AS Redesign_Completed_Date,
+  P.Electrical_Service_Change_Completed__c AS Electrical_Service_Change_Completed_Date,
+  P.All_Special_Services_Completed__c AS All_Special_Services_Completed_Date
+FROM
+  IonSF.Lead L
+LEFT JOIN
+  IonSF.Account AP
+ON
+  AP.Id = L.ConvertedAccountId
+LEFT JOIN
+  IonSF.Account AIS
+ON
+  AIS.id = L.IS_Setter__c
+LEFT JOIN
+  IonSF.Campaign CA2
+ON
+  CA2.id = AP.Campaigns__c
+LEFT JOIN
+  LatestProject P
+ON
+  AP.Id = P.Account_ID__c
+  AND P.ProjectNum = 1
+LEFT JOIN
+  IonSF.Inside_Sales_Leaders isl
+ON
+  P.IS_Setter_Formula__c = isl.team_member
+LEFT JOIN
+  SSTotals sst
+ON
+  sst.Project__c = P.id
+  AND P.Contract_Execution_Formula__c IS NOT NULL
+LEFT JOIN
+  FinanceRecords fr
+ON
+  fr.Project__c = P.id
+  AND P.Contract_Execution_Formula__c IS NOT NULL
+LEFT JOIN
+  IonSF.Campaign CA
+ON
+  CA.id = L.Campaign__c
+LEFT JOIN
+  LatestInstallation I
+ON
+  P.id = I.Project__c
+  AND I.InstallNum = 1
+LEFT JOIN
+  LatestDesign D
+ON
+  D.Project__c = P.Id
+  AND D.DesignNum = 1
+LEFT JOIN
+  LatestFinance F
+ON
+  F.Project__c = P.Id
+  AND F.FinanceNum = 1
+LEFT JOIN
+  IonSF.Account A
+ON
+  A.id = P.Sales_Team_Account_At_Sale__c
+LEFT JOIN
+  IonSF.Account A2
+ON
+  A2.id = P.Utility_Company__c
+LEFT JOIN
+  IonSF.Account AHJ
+ON
+  AHJ.id = P.Associated_Jurisdiction__c
+LEFT JOIN
+  rep_info SRI
+ON
+  SRI.id = P.Setter_Contact__c
+LEFT JOIN
+  rep_info CRI
+ON
+  CRI.id = P.Salesperson__c
+LEFT JOIN
+  IonSF.TeamRegionMapping TRM1
+ON
+  SRI.Recruiter_Team = TRM1.TeamName
+LEFT JOIN
+  IonSF.TeamRegionMapping TRM2
+ON
+  CRI.Recruiter_Team = TRM2.TeamName
+LEFT JOIN
+  IonSF.TeamRegionMapping TRM3
+ON
+  A.Name = TRM3.TeamName
+LEFT JOIN
+  LatestConvosoLead L2
+ON
+  L2.id = L.Convoso_Lead_Id__c
+  AND L2.LeadNum = 1
+LEFT JOIN
+  LatestHOA HO
+ON
+  HO.Project__c = P.Id
+  AND HO.HOANum = 1
+LEFT JOIN
+  IonSF.User U
+ON
+  P.Liaison__c = U.Id
+LEFT JOIN `IonSF.Avg_Cycle_Times` ACT ON P.Territory_Picklist__c = ACT.Territory
+LEFT JOIN `IonSF.Avg_Days_Between_Phases` ADB ON P.Territory_Picklist__c = ADB.Territory
+;
+END
