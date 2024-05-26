@@ -1,0 +1,251 @@
+-- CREATE OR REPLACE PROCEDURE --The Sales Info Table is currently updated using the Query "DataShareSIT"
+--   IonSF.CreateOrReplaceSalesInfoTable()
+-- BEGIN
+--   -- Drop the new table if it exists from a previous incomplete run
+--   -- Create the new table with a temporary name
+CREATE OR REPLACE TABLE
+  IonSF.Sales_Info_Table AS
+WITH LatestInstall AS (
+SELECT *,ROW_NUMBER() OVER (PARTITION BY Project__c ORDER BY Installation_Service_Created__c DESC) AS InstallNum
+FROM `IonSF.Installation`
+),
+LatestFinance AS (
+  SELECT *,ROW_NUMBER() OVER (PARTITION BY Project__c ORDER BY CreatedDate DESC) AS FinanceNum
+  FROM `IonSF.Financing`
+)
+SELECT
+  P.id AS Project_Id,
+  P.Name AS Project_Name,
+  P.Primary_Contact_Name__c AS Customer_Name,
+  P.Copiable_Address__c AS Address,
+  P.City__c AS City,
+  P.State__c AS State,
+  P.Zip_Code__c AS Zip,
+  P.Primary_Contact_Phone__c AS Phone_Number,
+  P.Primary_Contact_Email__c AS Email,
+  SRI.Name AS Setter,
+  SRI.Sales_Team AS Setter_Sales_Team,
+  SRI.Region AS Setter_Region,
+  SRI.Recruiter AS Setter_recruiter,
+  SRI.active__c AS Setter_Active,
+  SRI.rep_position__c AS Setter_Position,
+  SRI.ReportsTo AS Setter_Manager,
+  SRI.Hire_Date AS Setter_Hire_Date,
+  SRI.Termination_Date AS Setter_Termination_Date,
+  SRI.Recruiter_Sales_Team AS Setter_Recruiter_Team,
+  SRI.Email AS Setter_Email,
+  SRI.Phone AS Setter_Phone,
+  SRI.First_RFP,
+  SRI.First_Sit,
+  SRI.First_Sale AS Setter_First_Sale,
+  TRM1.Region AS Setter_Recruiter_Region,
+  CRI.Name AS Closer,
+  CRI.Sales_Team AS Closer_Sales_Team,
+  CRI.Region AS Closer_Region,
+  CRI.active__c AS Closer_Active,
+  CRI.Recruiter AS Closer_recruiter,
+  CRI.ReportsTo AS Closer_Manager,
+  CRI.Hire_Date AS Closer_Hire_Date,
+  CRI.rep_position__c AS Closer_Position,
+  CRI.Recruiter_Sales_Team AS Closer_Recruiter_Team,
+  CRI.Email AS Closer_Email,
+  CRI.Phone AS Closer_Phone,
+  CRI.Termination_Date AS Closer_Termination_Date,
+  CRI.First_Sale AS Closer_First_Sale,
+  TRM2.Region AS Closer_Recruiter_Region,
+  A.Name AS Sales_Team,
+  STE.Emoji AS Sales_Team_Emoji,
+  STE.Combined AS Sales_Team_Combined_Emoji,
+  P.Territory_Picklist__c AS Territory,
+  P.Inside_Sales_formula__c,
+  P.IS_Setter_Formula__c AS Inside_Setter,
+  ISU.IsActive AS Inside_Setter_Active,
+  ISL.TL AS Inside_TL,
+  TRM3.Region Sales_Region,
+  CASE
+    WHEN (P.Inside_Sales_formula__c = TRUE OR LOWER(P.IS_Setter_Formula__c) LIKE '%corporate%') AND A.Name = 'Inside Sales Closer Sales Team' THEN 'Inside-Inside'
+    WHEN (P.Inside_Sales_formula__c = TRUE
+    OR LOWER(P.IS_Setter_Formula__c) LIKE '%corporate%') THEN 'Inside - Outside'
+    WHEN P.Setter__c IS NULL OR CRI.Name = SRI.Name THEN 'Self Gen'
+  ELSE
+  'Outside - Outside'
+END
+  AS Sales_Channel,
+  P.New_Appointment_Disposition__c AS Appt_Disposition,
+  P.Sub_Disposition__c AS Appt_Sub_Disposition,
+  A2.Name AS Utility_Company,
+  A2.Purchase_Rate_From_Utility__c AS Utility_Rate,
+  A2.Buyback_Rate_From_Customer__c AS Utility_Buyback_Rate,
+  P.Proposal_Requested_Date__c AS RFP_Date,
+  DATETIME(FORMAT_TIMESTAMP('%F %T', TIMESTAMP(FORMAT_TIMESTAMP('%F %T', TIMESTAMP(P.Return_Appointment_Date_Time__c), 'UTC')), 'US/Mountain')) AS Return_Appointment_Date,
+  COALESCE(DATE(FORMAT_TIMESTAMP('%F %T', TIMESTAMP(FORMAT_TIMESTAMP('%F %T', TIMESTAMP(P.Appointment_Held_Date_Time_Stamp__c), 'UTC')), 'US/Mountain')),DATE(P.Appointment_Held_Date__c)) AS Sit_Date,
+  P.Contract_Execution_Formula__c AS Contract_Date,
+  I.Install_Scheduled_Date__c AS Install_Scheduled_Date,
+  P.Install_Complete__c AS Install_Complete_Date,
+  P.Status__c AS Project_Status,
+  CASE
+    WHEN (P.Contract_Execution_Formula__c IS NOT NULL AND P.Status__c IN ('In-Progress', 'Complete')) THEN 1
+  ELSE
+  0
+END
+  AS Net_Sale_Flag,
+  CASE
+    WHEN (P.Contract_Execution_Formula__c IS NOT NULL AND P.Status__c IN ('Cancellation_In_Progress', 'Canceled')) THEN 1
+  ELSE
+  0
+END
+  AS Cancel_Flag,
+  CASE
+    WHEN (P.Contract_Execution_Formula__c IS NOT NULL AND P.Status__c = 'On_Hold') THEN 1
+  ELSE
+  0
+END
+  AS On_Hold_Flag,
+  P.System_Size_Formula__c AS System_Size,
+  CA.name AS Campaign_Name,
+  CASE
+    WHEN (CA.name IS NOT NULL OR P.Inside_Sales_formula__c = true OR A.name = 'Inside Sales Closer Sales Team') THEN 'Inside'
+  ELSE
+  'Outside'
+END
+  AS Lead_Channel,
+  fc.Financing_Source__c AS Lender,
+  fc.Financing_Product__c AS Finance_Product,
+  fc.Gross_System_Price__c AS Gross_System_Price,
+  fc.Net_System_Price__C AS Net_System_Price,
+  fc.EPW__c AS Gross_PPW,
+  fc.Net_PPW_After_Adders__c AS Net_PPW_After_Adders,
+  fc.Net_PPW__c AS Net_PPW,
+  CASE
+    WHEN P.Proposal_Requested_Date__c >= SRI.Hire_Date THEN 1
+  ELSE
+  0
+END
+  AS RFP_Since_Hire_Flag,
+  CASE
+    WHEN P.Appointment_Held_Date__c >= SRI.Hire_Date THEN 1
+  ELSE
+  0
+END
+  AS Sit_Since_Hire_Flag,
+  CASE
+    WHEN P.Contract_Execution_Formula__c >= SRI.Hire_Date THEN 1
+  ELSE
+  0
+END
+  AS Sale_Since_Hire_Flag,
+  CASE
+    WHEN P.Proposal_Requested_Date__c >= DATE_SUB(CURRENT_DATE(), INTERVAL 8 WEEK) AND P.Proposal_Requested_Date__c <= DATE_SUB(CURRENT_DATE(), INTERVAL 2 WEEK) THEN 1
+  ELSE
+  0
+END
+  AS `6_Week_AvgRFP_Flag`,
+  CASE
+    WHEN P.Appointment_Held_Date__c >= DATE_SUB(CURRENT_DATE(), INTERVAL 8 WEEK) AND P.Appointment_Held_Date__c <= DATE_SUB(CURRENT_DATE(), INTERVAL 2 WEEK) THEN 1
+  ELSE
+  0
+END
+  AS `6_Week_AvgSit_Flag`,
+  CASE
+    WHEN P.Contract_Execution_Formula__c >= DATE_SUB(CURRENT_DATE(), INTERVAL 8 WEEK) AND P.Contract_Execution_Formula__c <= DATE_SUB(CURRENT_DATE(), INTERVAL 2 WEEK) THEN 1
+  ELSE
+  0
+END
+  AS `6_Week_AvgSale_Flag`,
+  CASE
+    WHEN DATE(P.Return_Appointment_Date_Time__c) >= DATE_SUB(CURRENT_DATE(), INTERVAL 8 WEEK) AND DATE(P.Return_Appointment_Date_Time__c) <= DATE_SUB(CURRENT_DATE(), INTERVAL 2 WEEK) THEN 1
+  ELSE
+  0
+END
+  AS `6_Week_AvgAppt_Flag`,
+  P.Suspension_Sub_Type__c,
+  CASE
+    WHEN A.name IN ('Tulsa Sales Team', 'OH BLK Sales Team') THEN 'Summer'
+    WHEN (P.Inside_Sales_formula__c = true
+    OR A.name = 'Inside Sales Closer Sales Team') THEN 'Inside'
+    WHEN SRI.Recruiter IN ('Ian Cunanan', 'Michael Scott', 'Pier Madsen', 'Andrew Kleinfelder', 'Kaden Eastman', 'Kira Crosby', 'Martin Amodia', 'Pallavi Bhasker') THEN 'Internally Recruited'
+    WHEN (SRI.Name IS NULL OR CRI.Name = SRI.Name) THEN 'Self Gen'
+  ELSE
+  'Outside'
+END
+  AS Conner_Lead_Channel,
+  CASE WHEN (SRI.Recruiter IN ('Ian Cunanan', 'Michael Scott', 'Pier Madsen', 'Andrew Kleinfelder', 'Kaden Eastman', 'Kira Crosby', 'Martin Amodia', 'Pallavi Bhasker') OR CRI.Recruiter IN ('Ian Cunanan', 'Michael Scott', 'Pier Madsen', 'Andrew Kleinfelder', 'Kaden Eastman', 'Kira Crosby', 'Martin Amodia', 'Pallavi Bhasker')) THEN 'Internally Recruited'
+  ELSE 'Externally Recruited'
+  END AS RecruitType,
+  CASE WHEN SRI.Recruiter IN ('Ian Cunanan', 'Michael Scott', 'Pier Madsen', 'Andrew Kleinfelder', 'Kaden Eastman', 'Kira Crosby', 'Martin Amodia', 'Pallavi Bhasker') THEN 'Internally Recruited'
+  ELSE 'Externally Recruited'
+  END as Setter_Recruiter_Type,
+  CASE WHEN CRI.Recruiter IN ('Ian Cunanan', 'Michael Scott', 'Pier Madsen', 'Andrew Kleinfelder', 'Kaden Eastman', 'Kira Crosby', 'Martin Amodia', 'Pallavi Bhasker') THEN 'Internally Recruited'
+  ELSE 'Externally Recruited'
+  END as Closer_Recruiter_Type,
+  Suspension_Type__c AS Suspension_Type,
+  Cancellation_Date_Time_Requested__c AS Cancel_Date,
+  ROW_NUMBER() OVER (PARTITION BY P.salesperson__c ORDER BY P.Appointment_Held_Date__c DESC) AS Closer_Sit_Number,
+  ROW_NUMBER() OVER (PARTITION BY A.name ORDER BY P.Install_Complete__c DESC) AS Sales_Team_Install_Number,
+  ROW_NUMBER() OVER (ORDER BY P.Install_Complete__c DESC) AS Install_Number,
+  P.Contract_Stage_Complete_Formula__c,
+  P.Project_Phase__c AS Project_Phase
+FROM
+  IonSF.Project P
+-- LEFT JOIN
+--   IonSF.Account AP
+-- ON
+--   AP.id = P.Account_ID__c --I commented out the left joins that aren't actually being used. - Michael
+-- LEFT JOIN
+--   IonSF.Campaign CA2
+-- ON
+--   CA2.id = AP.Campaigns__c
+LEFT JOIN
+  IonSF.Campaign CA
+ON
+  CA.id = P.Primary_Campaign__c
+-- LEFT JOIN
+--   IonSF.Financing F
+-- ON
+--   P.id = F.Project__c -- Same here
+LEFT JOIN
+  LatestInstall I
+ON
+  P.id = I.project__c AND I.InstallNum = 1
+LEFT JOIN
+  `IonSF.Rep_Info_Table` SRI
+ON
+  P.setter_contact__c = SRI.id
+LEFT JOIN
+  `IonSF.Rep_Info_Table` CRI
+ON
+  P.salesperson__c = CRI.id
+LEFT JOIN
+  IonSF.Account A
+ON
+  A.id = P.Sales_Team_Account_At_Sale__c
+LEFT JOIN
+  IonSF.Account A2
+ON
+  A2.id = P.Utility_Company__c
+LEFT JOIN
+  LatestFinance fc
+ON
+  fc.project__c = P.id AND fc.FinanceNum = 1
+LEFT JOIN
+  IonSF.TeamRegionMapping TRM1
+ON
+  SRI.Recruiter_Sales_Team = TRM1.TeamName
+LEFT JOIN
+  IonSF.TeamRegionMapping TRM2
+ON
+  CRI.Recruiter_Sales_Team = TRM2.TeamName
+LEFT JOIN
+  IonSF.TeamRegionMapping TRM3
+ON
+  A.Name = TRM3.TeamName
+LEFT JOIN
+  IonSF.Inside_Sales_Leaders ISL
+ON
+  P.IS_Setter_Formula__c = ISL.team_member 
+LEFT JOIN
+  IonSF.Sales_Team_Emojis STE
+ON
+  A.Name = STE.Sales_Team
+LEFT JOIN IonSF.User ISU ON P.IS_Setter__c = ISU.Id;
+END
